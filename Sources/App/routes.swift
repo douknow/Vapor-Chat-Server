@@ -2,52 +2,6 @@ import Fluent
 import Vapor
 
 
-struct User {
-    let id: Int
-    let username: String
-}
-
-let users = [
-    User(id: 0, username: "Anna"),
-    User(id: 1, username: "Bob")
-]
-
-func findUser(by id: Int) -> User? {
-    users.first(where: { $0.id == id })
-}
-
-extension User: Equatable {
-    static func ==(lhs: User, rhs: User) -> Bool {
-        lhs.id == rhs.id
-    }
-}
-
-var wss: [Int: WebSocket] = [:]
-
-let decoder: JSONDecoder = {
-    let decoder = JSONDecoder()
-    return decoder
-}()
-
-let encoder: JSONEncoder = {
-    let encoder = JSONEncoder()
-    return encoder
-}()
-
-let queue = DispatchQueue(label: "com.websocket.write.wss")
-
-func removeUserFromWss(user: User) {
-    queue.sync(flags: .barrier) {
-        _ = wss.removeValue(forKey: user.id)
-    }
-}
-
-func saveUserAndSocket(user: User, ws: WebSocket) {
-    queue.sync(flags: .barrier) {
-        wss[user.id] = ws
-    }
-}
-
 func routes(_ app: Application) throws {
     app.get { req in
         return "It works!"
@@ -68,7 +22,7 @@ func routes(_ app: Application) throws {
 
     app.webSocket("chat") { req, ws in
         guard let query = try? req.query.decode(ChatQuery.self),
-              let user = findUser(by: query.id) else {
+              let user = User.findUser(by: query.id) else {
             _ = ws.close(code: .unacceptableData)
             return
         }
@@ -87,12 +41,18 @@ func routes(_ app: Application) throws {
             }
 
             do {
-                let message = try decoder.decode(Message.self, from: data)
+                let message = try decoder.decode(MessageData.self, from: data)
+                ws.send(Response.successResponse)
 
-                if let destUser = findUser(by: message.to),
+                if let destUser = User.findUser(by: message.to),
                    let destWs = wss[destUser.id] {
-                    destWs.send(message.content)
-                    ws.send(Response.successResponse)
+                    let promise = req.eventLoop.makePromise(of: Void.self)
+                    destWs.send(MessageResponse.sendDestMessage(message), promise: promise)
+                    promise.futureResult.whenComplete { result in
+                        if case let .failure(error) = result {
+                            print("Send to dest ws error: \(error)")
+                        }
+                    }
                 }
             } catch {
                 print(error)
@@ -105,30 +65,5 @@ func routes(_ app: Application) throws {
     try app.register(collection: TodoController())
 }
 
-struct ChatQuery: Codable {
-    let id: Int
-}
 
-struct Message: Codable {
-    var time: Date! = Date()
-
-    let to: Int
-    let content: String
-}
-
-struct Response: Codable {
-    let status: Int
-    let msg: String
-
-    var json: String {
-        guard let data = try? encoder.encode(self),
-              let json = String(data: data, encoding: .utf8) else {
-            return "{ status: 1, msg: \"Response to json error.\" }"
-        }
-        return json
-    }
-
-    static let dataParseError: String = Response(status: 1, msg: "Data parse error").json
-    static let successResponse: String = Response(status: 0, msg: "Send success").json
-}
 
