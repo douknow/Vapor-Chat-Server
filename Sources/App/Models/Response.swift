@@ -8,10 +8,12 @@
 import Foundation
 
 
-struct Response: Encodable {
+protocol Response: Encodable {
+    var status: Int { get }
+    var json: String { get }
+}
 
-    let status: Int
-    let msg: String
+extension Response {
 
     var json: String {
         guard let data = try? encoder.encode(self),
@@ -24,27 +26,37 @@ struct Response: Encodable {
 }
 
 
-extension Response {
-
-    static let dataParseError: String = Response(status: 1, msg: "Data parse error").json
-    static let successResponse: String = Response(status: 0, msg: "Send success").json
-
+struct InfoResponse: Response {
+    let status: Int
+    let msg: String
 }
 
-struct MessageResponse: Encodable {
 
-    static func sendDestMessage(_ message: MessageData) -> String {
-        MessageResponse(messageData: message).json
+extension InfoResponse {
+    static let dataParseError: String = InfoResponse(status: 1, msg: "Data parse error").json
+    static let successResponse: String = InfoResponse(status: 0, msg: "Send success").json
+}
+
+
+func responseJSON(_ message: MessageData) -> String {
+    switch message {
+    case let message as TextMessageData:
+        return MessageResponse(messageData: message).json
+    case let message as ImgMessageData:
+        return ImgResponse(messageData: message).json
+    default:
+        fatalError()
     }
+}
 
+
+struct MessageResponse: Response {
     let status = 2
-    let messageData: MessageData
+    let messageData: TextMessageData
+}
 
-    var json: String {
-        guard let data = try? encoder.encode(self),
-              let json = String(data: data, encoding: .utf8) else {
-            return ""
-        }
-        return json
-    }
+
+struct ImgResponse: Response {
+    let status = 3
+    let messageData: ImgMessageData
 }

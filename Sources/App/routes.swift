@@ -3,12 +3,18 @@ import Vapor
 
 
 func routes(_ app: Application) throws {
-    app.get { req in
-        return "It works!"
-    }
 
-    app.get("hello") { req -> String in
-        return "Hello, world!"
+    app.post("upload") { req -> EventLoopFuture<String> in
+        let key = try req.query.get(String.self, at: "key")
+        let path = req.application.directory.publicDirectory + key
+        return req.body.collect()
+            .unwrap(or: Abort(.noContent))
+            .map {
+                print($0)
+                return $0
+            }
+            .flatMap { req.fileio.writeFile($0, at: path) }
+            .map { key }
     }
 
     app.webSocket("echo") { req, ws in
@@ -36,26 +42,30 @@ func routes(_ app: Application) throws {
 
         ws.onText { ws, text in
             guard let data = text.data(using: .utf8) else {
-                ws.send(Response.dataParseError)
+                ws.send(InfoResponse.dataParseError)
                 return
             }
 
-            do {
-                let message = try decoder.decode(MessageData.self, from: data)
-                ws.send(Response.successResponse)
+            let message: MessageData? = (try? decoder.decode(TextMessageData.self.self, from: data)) ??
+                (try? decoder.decode(ImgMessageData.self, from: data))
 
-                if let destUser = User.findUser(by: message.to),
-                   let destWs = wss[destUser.id] {
-                    let promise = req.eventLoop.makePromise(of: Void.self)
-                    destWs.send(MessageResponse.sendDestMessage(message), promise: promise)
-                    promise.futureResult.whenComplete { result in
-                        if case let .failure(error) = result {
-                            print("Send to dest ws error: \(error)")
-                        }
+            guard let message = message else {
+                ws.send(InfoResponse.dataParseError)
+                print("Invalid message data")
+                return
+            }
+
+            ws.send(InfoResponse.successResponse)
+
+            if let destUser = User.findUser(by: message.to),
+               let destWs = wss[destUser.id] {
+                let promise = req.eventLoop.makePromise(of: Void.self)
+                destWs.send(responseJSON(message), promise: promise)
+                promise.futureResult.whenComplete { result in
+                    if case let .failure(error) = result {
+                        print("Send to dest ws error: \(error)")
                     }
                 }
-            } catch {
-                print(error)
             }
         }
 
